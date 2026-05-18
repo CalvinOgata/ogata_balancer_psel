@@ -1,0 +1,137 @@
+services:
+  load_balancer:
+    build:
+      context: .
+      dockerfile: load_balancer/Dockerfile
+    ports:
+      - "${LB_HTTP_PORT:-8080}:8080"
+      - "${LB_HTTPS_PORT:-8443}:8443"
+    environment:
+      LB_HTTP_PORT: "8080"
+      LB_HTTPS_PORT: "8443"
+      LB_HEALTH_INGEST_PORT: "${LB_HEALTH_INGEST_PORT:-9443}"
+      BACKEND_HOSTS: "server1,server2,server3,server4,server5"
+      BACKEND_PORT: "${SERVER_PORT:-4443}"
+      CERT_PATH: "/app/certs/cert.pem"
+      KEY_PATH: "/app/certs/key.pem"
+      LB_CLIENT_CERT_PATH: "/app/certs/lb-client-chain.pem"
+      LB_CLIENT_KEY_PATH: "/app/certs/lb-client.key"
+      FRONTEND_DIR: "/app/frontend"
+    volumes:
+      - ./certs/cert.pem:/app/certs/cert.pem:ro
+      - ./certs/key.pem:/app/certs/key.pem:ro
+      - ./certs/lb-client-chain.pem:/app/certs/lb-client-chain.pem:ro
+      - ./certs/lb-client.key:/app/certs/lb-client.key:ro
+      - ./frontend:/app/frontend:ro
+    depends_on:
+      - server1
+      - server2
+      - server3
+      - server4
+      - server5
+    networks:
+      - balancer_net
+
+  server1:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      SERVER_ID: "server1"
+      SERVER_PORT: "${SERVER_PORT:-4443}"
+      CERT_PATH: "/app/certs/cert.pem"
+      KEY_PATH: "/app/certs/key.pem"
+      LB_CLIENT_CA_PATH: "/app/certs/lb-client.pem"
+      LB_HEALTH_INGEST_HOST: "load_balancer"
+      LB_HEALTH_INGEST_PORT: "${LB_HEALTH_INGEST_PORT:-9443}"
+      HEALTH_REPORT_INTERVAL_SECS: "${HEALTH_REPORT_INTERVAL_SECS:-2}"
+    volumes:
+      - ./certs/cert.pem:/app/certs/cert.pem:ro
+      - ./certs/key.pem:/app/certs/key.pem:ro
+      - ./certs/lb-ca.pem:/app/certs/lb-client.pem:ro
+    networks:
+      - balancer_net
+
+  server2:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      SERVER_ID: "server2"
+      SERVER_PORT: "${SERVER_PORT:-4443}"
+      CERT_PATH: "/app/certs/cert.pem"
+      KEY_PATH: "/app/certs/key.pem"
+      LB_CLIENT_CA_PATH: "/app/certs/lb-client.pem"
+      LB_HEALTH_INGEST_HOST: "load_balancer"
+      LB_HEALTH_INGEST_PORT: "${LB_HEALTH_INGEST_PORT:-9443}"
+      HEALTH_REPORT_INTERVAL_SECS: "${HEALTH_REPORT_INTERVAL_SECS:-2}"
+    volumes:
+      - ./certs/cert.pem:/app/certs/cert.pem:ro
+      - ./certs/key.pem:/app/certs/key.pem:ro
+      - ./certs/lb-ca.pem:/app/certs/lb-client.pem:ro
+    networks:
+      - balancer_net
+
+  server3:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      SERVER_ID: "server3"
+      SERVER_PORT: "${SERVER_PORT:-4443}"
+      CERT_PATH: "/app/certs/cert.pem"
+      KEY_PATH: "/app/certs/key.pem"
+      LB_CLIENT_CA_PATH: "/app/certs/lb-client.pem"
+      LB_HEALTH_INGEST_HOST: "load_balancer"
+      LB_HEALTH_INGEST_PORT: "${LB_HEALTH_INGEST_PORT:-9443}"
+      HEALTH_REPORT_INTERVAL_SECS: "${HEALTH_REPORT_INTERVAL_SECS:-2}"
+    volumes:
+      - ./certs/cert.pem:/app/certs/cert.pem:ro
+      - ./certs/key.pem:/app/certs/key.pem:ro
+      - ./certs/lb-ca.pem:/app/certs/lb-client.pem:ro
+    networks:
+      - balancer_net
+
+  server4:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      SERVER_ID: "server4"
+      SERVER_PORT: "${SERVER_PORT:-4443}"
+      CERT_PATH: "/app/certs/cert.pem"
+      KEY_PATH: "/app/certs/key.pem"
+      LB_CLIENT_CA_PATH: "/app/certs/lb-client.pem"
+      LB_HEALTH_INGEST_HOST: "load_balancer"
+      LB_HEALTH_INGEST_PORT: "${LB_HEALTH_INGEST_PORT:-9443}"
+      HEALTH_REPORT_INTERVAL_SECS: "${HEALTH_REPORT_INTERVAL_SECS:-2}"
+    volumes:
+      - ./certs/cert.pem:/app/certs/cert.pem:ro
+      - ./certs/key.pem:/app/certs/key.pem:ro
+      - ./certs/lb-ca.pem:/app/certs/lb-client.pem:ro
+    networks:
+      - balancer_net
+
+  server5:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      SERVER_ID: "server5"
+      SERVER_PORT: "${SERVER_PORT:-4443}"
+      CERT_PATH: "/app/certs/cert.pem"
+      KEY_PATH: "/app/certs/key.pem"
+      LB_CLIENT_CA_PATH: "/app/certs/lb-client.pem"
+      LB_HEALTH_INGEST_HOST: "load_balancer"
+      LB_HEALTH_INGEST_PORT: "${LB_HEALTH_INGEST_PORT:-9443}"
+      HEALTH_REPORT_INTERVAL_SECS: "${HEALTH_REPORT_INTERVAL_SECS:-2}"
+    volumes:
+      - ./certs/cert.pem:/app/certs/cert.pem:ro
+      - ./certs/key.pem:/app/certs/key.pem:ro
+      - ./certs/lb-ca.pem:/app/certs/lb-client.pem:ro
+    networks:
+      - balancer_net
+
+networks:
+  balancer_net:
+    driver: bridge

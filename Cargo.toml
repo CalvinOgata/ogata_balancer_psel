@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["shared", "server", "load_balancer"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+shared = { path = "shared" }
+
+# TLS — implementing TLS from scratch is out of scope for this learning project,
+# but raw HTTP parsing is not. We use rustls only as a transport layer.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls-pemfile = "2"
+
+# Misc
+rand = "0.8"

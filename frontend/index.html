@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ogata_balancer</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+    <!-- HTMX is the only frontend dependency, served from a CDN. -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  </head>
+  <body>
+    <header>
+      <h1>ogata_balancer</h1>
+      <p class="tagline">
+        A toy load balancer in Rust. Click the button to download a random PDF
+        from one of the five backends; the panel below shows live health.
+      </p>
+    </header>
+
+    <main>
+      <section class="actions">
+        <a class="btn" href="/file" target="_blank" rel="noopener noreferrer">Download a random document</a>
+      </section>
+
+      <section class="status">
+        <h2>Backends</h2>
+        <div
+          id="server-status"
+          hx-get="/api/servers"
+          hx-trigger="load, every 2s"
+          hx-swap="innerHTML"
+        >
+          <p class="loading">Loading server status&hellip;</p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <small
+        >Sticky sessions are keyed by client IP; once you&rsquo;re routed to a
+        backend, all your subsequent requests land on that backend until it
+        goes away.</small
+      >
+    </footer>
+  </body>
+</html>

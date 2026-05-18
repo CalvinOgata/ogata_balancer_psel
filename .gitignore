@@ -1,0 +1,16 @@
+/target
+**/target
+
+# Environment
+.env
+
+# Certificates and private keys — regenerate locally with scripts/generate-certs.sh
+certs/*.pem
+certs/*.key
+certs/*.pub
+!certs/.gitkeep
+
+# Claude Code
+.claude/
+claude-session.txt
+search.txt
