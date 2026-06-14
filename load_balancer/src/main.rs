@@ -19,7 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use rustls::{ServerConnection, Stream};
-use shared::protocol::{read_request, write_response};
+use shared::parser::{read_request, write_response};
 
 mod health;
 mod proxy;

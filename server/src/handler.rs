@@ -20,7 +20,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rand::seq::SliceRandom;
 use rustls::{ServerConnection, Stream};
-use shared::protocol::{Request, Response, read_request, write_response};
+use shared::parser::{Request, Response, read_request, write_response};
 use shared::SERVER_ID_HEADER;
 
 use crate::health::{HealthState, InFlightGuard};
@@ -102,6 +102,11 @@ fn access_log(
 fn route(ctx: &HandlerCtx, req: &Request) -> Response {
     let mut resp = match (req.method.as_str(), req.target.as_str()) {
         ("GET", "/file") => serve_random_pdf(&ctx.files_dir),
+        ("HEAD", "/file") => {
+            let mut r = serve_random_pdf(&ctx.files_dir);
+            r.body.clear(); // headers (including Content-Length) stay intact
+            r
+        }
         ("GET", "/_ping") => Response::status(200, "OK", "pong"),
         _ => Response::status(404, "Not Found", "no such route"),
     };

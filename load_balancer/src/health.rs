@@ -13,7 +13,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use shared::protocol::{HealthReport, Request, Response};
+use shared::parser::{HealthReport, Request, Response};
 
 /// If we haven't heard from a server in this long, treat it as unavailable
 /// regardless of what its last report said.

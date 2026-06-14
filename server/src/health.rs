@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use shared::protocol::HealthReport;
+use shared::parser::HealthReport;
 
 /// Notional capacity of a single backend. With `MAX_IN_FLIGHT` concurrent
 /// requests the server reports `load == 1.0`.

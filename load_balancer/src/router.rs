@@ -12,7 +12,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use shared::protocol::{Request, Response};
+use shared::parser::{Request, Response};
 
 use crate::health::Registry;
 use crate::proxy::{ProxyCtx, forward};

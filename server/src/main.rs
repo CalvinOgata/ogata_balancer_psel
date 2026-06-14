@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConnection, ServerConnection, Stream};
-use shared::protocol::{Request, read_response, write_request};
+use shared::parser::{Request, read_response, write_request};
 use shared::SERVER_ID_HEADER;
 
 mod handler;

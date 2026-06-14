@@ -1,30 +1,11 @@
-// Minimal HTTP/1.1 parser + serializer.
-//
-// We deliberately implement HTTP by hand instead of depending on `httparse` or
-// `hyper`. The tradeoffs are:
-//
-//   * Only the subset of HTTP we actually need is supported: request/status
-//     lines, plain headers, `Content-Length`-delimited bodies. No chunked
-//     transfer, no trailers, no continuations, no multipart parsing.
-//   * Inputs are bounded so a misbehaving peer cannot exhaust memory: the
-//     header section is capped, and the body length must be advertised via
-//     `Content-Length`.
-//
-// The same types and parsing routines are used on both sides — the load
-// balancer parses what clients send, and the servers parse what the load
-// balancer forwards.
+// Hand-written HTTP/1.1 parser and serializer — no external HTTP library.
 
 use std::io::{self, BufRead, Read, Write};
 
-/// Maximum bytes accepted in the request/response head (request line + all
-/// headers + the trailing `\r\n\r\n`).
+// Hard cap on the request/response head (request line + headers + blank line).
 pub const MAX_HEAD_BYTES: usize = 16 * 1024;
 
-/// Maximum bytes accepted in a body. We don't stream — the proxy reads the
-/// whole backend response into memory before sending it to the client — so
-/// this is also the largest single PDF we can serve. Real textbooks routinely
-/// run >100 MB, hence the generous cap. A production proxy would stream
-/// instead of buffering.
+// Hard cap on body size; large enough to serve PDF textbooks buffered in memory.
 pub const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -45,18 +26,13 @@ pub struct Response {
 }
 
 impl Response {
-    // Build a 200 OK response carrying `body` with the given `Content-Type`.
-    // Always sets `Content-Length`, `Connection: close` (we don't keep-alive),
-    // and `Cache-Control: no-store` so a load-balanced refresh genuinely hits
-    // a backend instead of a stale cache.
+    // Build a 200 OK with Content-Type, Content-Length, Connection: close, and Cache-Control: no-store.
     pub fn ok(body: Vec<u8>, content_type: &str) -> Self {
         let mut headers = vec![
             ("Content-Type".into(), content_type.into()),
             ("Content-Length".into(), body.len().to_string()),
             ("Connection".into(), "close".into()),
         ];
-        // Browsers handle PDFs fine inline; the caller can override if it wants
-        // a download prompt by replacing/extending headers.
         headers.push(("Cache-Control".into(), "no-store".into()));
         Self {
             status: 200,
@@ -66,9 +42,7 @@ impl Response {
         }
     }
 
-    // Convenience constructor for an arbitrary status code with a plain-text
-    // body. Used everywhere we need to emit an error (4xx/5xx) or a tiny
-    // textual ack ("ok", "pong", ...).
+    // Build a response with any status code and a plain-text body.
     pub fn status(code: u16, reason: &str, body: &str) -> Self {
         let body = body.as_bytes().to_vec();
         let headers = vec![
@@ -84,14 +58,13 @@ impl Response {
         }
     }
 
-    // Append a header to the response. Does not deduplicate — callers who
-    // care about uniqueness must check first.
+    // Append a header without deduplication.
     pub fn add_header(&mut self, name: &str, value: &str) {
         self.headers.push((name.into(), value.into()));
     }
 }
 
-/// Look up a header value by case-insensitive name.
+/// Case-insensitive header lookup.
 pub fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers
         .iter()
@@ -99,8 +72,7 @@ pub fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&
         .map(|(_, v)| v.as_str())
 }
 
-/// Read an HTTP request from a buffered reader. Bounded by `MAX_HEAD_BYTES`
-/// and `MAX_BODY_BYTES`.
+/// Parse an HTTP request from a buffered reader.
 pub fn read_request<R: BufRead>(r: &mut R) -> io::Result<Request> {
     let head = read_head(r)?;
     let mut lines = head.split("\r\n");
@@ -133,7 +105,7 @@ pub fn read_request<R: BufRead>(r: &mut R) -> io::Result<Request> {
     })
 }
 
-/// Read an HTTP response from a buffered reader. Mirror of `read_request`.
+/// Parse an HTTP response from a buffered reader.
 pub fn read_response<R: BufRead>(r: &mut R) -> io::Result<Response> {
     let head = read_head(r)?;
     let mut lines = head.split("\r\n");
@@ -162,10 +134,7 @@ pub fn read_response<R: BufRead>(r: &mut R) -> io::Result<Response> {
     })
 }
 
-// Pull bytes from `r` until we see the blank line that terminates an HTTP
-// head section (`\r\n\r\n` or `\n\n`). Bounded by `MAX_HEAD_BYTES` so a
-// peer can't blow our memory by streaming an unbounded header section.
-// Returns the decoded UTF-8 head with the trailing CRLF trimmed.
+// Read lines until the blank line that ends an HTTP head section; bounded by MAX_HEAD_BYTES.
 fn read_head<R: BufRead>(r: &mut R) -> io::Result<String> {
     let mut buf = Vec::with_capacity(1024);
     loop {
@@ -183,21 +152,17 @@ fn read_head<R: BufRead>(r: &mut R) -> io::Result<String> {
                 "connection closed before end of headers",
             ));
         }
-        // Detect end-of-head: a line containing only \r\n (or just \n).
         let line = &buf[before..];
         if line == b"\r\n" || line == b"\n" {
             break;
         }
     }
-    // Strip the trailing blank line so the caller never has to worry about it.
     let s = String::from_utf8(buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-utf8 header section"))?;
     Ok(s.trim_end_matches(['\r', '\n']).to_string())
 }
 
-// Parse the post-request-line lines into (name, value) pairs. Does not
-// fold multi-line continuation headers — those are obsolete and we don't
-// need them. Empty lines are tolerated and skipped.
+// Split header lines into (name, value) pairs; skips empty lines.
 fn parse_headers<'a, I: Iterator<Item = &'a str>>(lines: I) -> io::Result<Vec<(String, String)>> {
     let mut headers = Vec::new();
     for line in lines {
@@ -212,10 +177,7 @@ fn parse_headers<'a, I: Iterator<Item = &'a str>>(lines: I) -> io::Result<Vec<(S
     Ok(headers)
 }
 
-// Read exactly `Content-Length` bytes off `r`, or return an empty body if
-// no length is advertised. Rejects bodies larger than `MAX_BODY_BYTES`.
-// We don't support `Transfer-Encoding: chunked` — the parser would have
-// already rejected that header if present in a forwarded request.
+// Read exactly Content-Length bytes; returns empty body if header is absent.
 fn read_body<R: Read>(r: &mut R, headers: &[(String, String)]) -> io::Result<Vec<u8>> {
     let len: usize = match header_value(headers, "Content-Length") {
         Some(v) => v
@@ -234,9 +196,7 @@ fn read_body<R: Read>(r: &mut R, headers: &[(String, String)]) -> io::Result<Vec
     Ok(body)
 }
 
-/// Serialize a `Response` onto a writer in HTTP/1.1 wire format and flush.
-/// Headers are emitted in insertion order — the caller is responsible for
-/// having put `Content-Length` etc. in place.
+/// Serialize a Response to HTTP/1.1 wire format and flush.
 pub fn write_response<W: Write>(w: &mut W, resp: &Response) -> io::Result<()> {
     write!(w, "HTTP/1.1 {} {}\r\n", resp.status, resp.reason)?;
     for (k, v) in &resp.headers {
@@ -248,8 +208,7 @@ pub fn write_response<W: Write>(w: &mut W, resp: &Response) -> io::Result<()> {
     Ok(())
 }
 
-/// Mirror of `write_response` for an outgoing client request — used by the
-/// LB when proxying upstream and by the server when posting health reports.
+/// Serialize a Request to HTTP/1.1 wire format and flush.
 pub fn write_request<W: Write>(w: &mut W, req: &Request) -> io::Result<()> {
     write!(w, "{} {} {}\r\n", req.method, req.target, req.version)?;
     for (k, v) in &req.headers {
@@ -261,19 +220,8 @@ pub fn write_request<W: Write>(w: &mut W, req: &Request) -> io::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Server -> load balancer health report.
-//
-// Sent as an HTTP POST to /_health on the load balancer's health-ingest port.
-// The body is a tiny line-oriented key=value document so we don't have to pull
-// in a JSON library for it. Fields:
-//
-//   server_id=<string>
-//   load=<f32 in 0.0..=1.0>
-//   available=<true|false>
-//   in_flight=<u32>
-// ---------------------------------------------------------------------------
-
+// Health report sent as a POST body to the LB's health-ingest port.
+// Wire format: key=value lines (server_id, load, available, in_flight).
 #[derive(Debug, Clone)]
 pub struct HealthReport {
     pub server_id: String,
@@ -283,9 +231,7 @@ pub struct HealthReport {
 }
 
 impl HealthReport {
-    // Serialize a report to the line-oriented `key=value` body that the LB
-    // health-ingest endpoint expects. Pairs with `decode` and is the entire
-    // wire format — no JSON involved.
+    // Serialize to key=value line format.
     pub fn encode(&self) -> String {
         format!(
             "server_id={}\nload={}\navailable={}\nin_flight={}\n",
@@ -293,9 +239,7 @@ impl HealthReport {
         )
     }
 
-    // Parse the body produced by `encode`. Returns `None` if any required
-    // field is missing or unparseable; unknown keys are tolerated so we can
-    // add fields later without breaking older peers.
+    // Parse key=value lines; returns None if any required field is missing or invalid.
     pub fn decode(s: &str) -> Option<Self> {
         let mut server_id = None;
         let mut load = None;
@@ -325,8 +269,6 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    // The simplest possible GET should round-trip through the parser with
-    // headers preserved and method/target extracted correctly.
     #[test]
     fn parses_simple_get() {
         let raw = b"GET /file HTTP/1.1\r\nHost: lb\r\nX-Auth-Token: abc\r\n\r\n";
@@ -337,8 +279,6 @@ mod tests {
         assert_eq!(header_value(&req.headers, "host"), Some("lb"));
     }
 
-    // A POST with `Content-Length` must read exactly that many body bytes
-    // off the stream and stop — the path used by health reports.
     #[test]
     fn parses_post_with_body() {
         let raw = b"POST /_health HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
@@ -347,9 +287,6 @@ mod tests {
         assert_eq!(req.body, b"hello");
     }
 
-    // A request with a head section larger than `MAX_HEAD_BYTES` must
-    // fail — this is the bound that protects us against unbounded peer
-    // memory consumption.
     #[test]
     fn rejects_too_large_head() {
         let mut raw = Vec::from(&b"GET / HTTP/1.1\r\n"[..]);
@@ -360,8 +297,6 @@ mod tests {
         assert!(read_request(&mut r).is_err());
     }
 
-    // `encode` followed by `decode` must reconstruct the same report — the
-    // health protocol depends on this being stable.
     #[test]
     fn round_trip_health_report() {
         let r = HealthReport {
