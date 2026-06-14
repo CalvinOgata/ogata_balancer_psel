@@ -14,3 +14,4 @@ certs/*.pub
 .claude/
 claude-session.txt
 search.txt
+CLAUDE.md
