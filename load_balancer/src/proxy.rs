@@ -1,19 +1,4 @@
-// Forward a request to a backend over mTLS and return the response.
-//
-// What we do at this layer:
-//   * regenerate hop-by-hop headers — the client's `Connection: keep-alive`
-//     etc. don't apply between us and the backend;
-//   * rewrite `Host` to the backend's hostname so it matches the cert SAN;
-//   * append the client IP to `X-Forwarded-For`.
-//
-// Authentication is handled entirely by mTLS: the server verifies the LB's
-// client certificate during the handshake. No application-layer token needed.
-//
-// What we *don't* do: connection pooling, streaming. Each forward opens a
-// fresh TLS connection and buffers the response in full. For a learning
-// project this is the right tradeoff — adding a pool would require either
-// async or a small connection-manager thread, neither of which sheds light on
-// load balancing.
+// mTLS proxy: forwards client requests to a backend and returns the sanitized response.
 
 use std::io::BufReader;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -22,13 +7,12 @@ use std::time::Duration;
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConnection, Stream};
-use shared::parser::{Request, Response, read_response, write_request};
 use shared::SERVER_ID_HEADER;
+use shared::parser::{Request, Response, read_response, write_request};
 
 use crate::health::Backend;
 
-// RFC 7230 hop-by-hop headers: stripped in *both* directions because they
-// describe a single connection and don't apply to the next hop.
+// RFC 7230 hop-by-hop headers — stripped from both request and response.
 const HOP_BY_HOP: &[&str] = &[
     "connection",
     "keep-alive",
@@ -40,22 +24,14 @@ const HOP_BY_HOP: &[&str] = &[
     "proxy-authorization",
 ];
 
-// Request-only strips: `Host` is rewritten to the backend hostname;
-// `X-Server-Id` is LB-controlled and must not be spoofed by the client.
+// Extra request-only strips: Host is rewritten; X-Server-Id must not be client-spoofable.
 const REQUEST_STRIP_EXTRA: &[&str] = &["host", SERVER_ID_HEADER];
 
 pub struct ProxyCtx {
     pub tls_client: Arc<rustls::ClientConfig>,
 }
 
-// Open a fresh mTLS connection to `backend`, write a sanitized version of
-// the client request, read the full response back, sanitize it, and return
-// it. One connection per upstream call — no pooling.
-//
-// HEAD requests are converted to GET internally: the HTTP spec requires the
-// server to omit the body for HEAD but keep Content-Length, which makes the
-// response impossible to parse without already knowing the method. Sending
-// GET and stripping the body on the way back avoids this.
+// Opens a fresh mTLS connection per call (no pooling); HEAD is rewritten to GET to avoid body-less parse issues.
 pub fn forward(
     ctx: &ProxyCtx,
     backend: &Backend,
@@ -90,11 +66,13 @@ pub fn forward(
     Ok(resp)
 }
 
-// Build the upstream request: strip hop-by-hop and LB-controlled headers,
-// set `Host` to the backend hostname, and append the client IP to
-// `X-Forwarded-For`. HEAD is rewritten to GET so the backend sends a body
-// we can parse; the caller strips the body after reading.
-fn forge_request(backend: &Backend, src: &Request, client_ip: std::net::IpAddr, is_head: bool) -> Request {
+// Strips forbidden headers, rewrites Host, appends X-Forwarded-For, and converts HEAD to GET.
+fn forge_request(
+    backend: &Backend,
+    src: &Request,
+    client_ip: std::net::IpAddr,
+    is_head: bool,
+) -> Request {
     let mut headers: Vec<(String, String)> = src
         .headers
         .iter()
@@ -118,7 +96,11 @@ fn forge_request(backend: &Backend, src: &Request, client_ip: std::net::IpAddr, 
     }
 
     Request {
-        method: if is_head { "GET".into() } else { src.method.clone() },
+        method: if is_head {
+            "GET".into()
+        } else {
+            src.method.clone()
+        },
         target: src.target.clone(),
         version: "HTTP/1.1".into(),
         headers,
@@ -126,9 +108,7 @@ fn forge_request(backend: &Backend, src: &Request, client_ip: std::net::IpAddr, 
     }
 }
 
-// Clean up an upstream response before sending it to the client: drop
-// hop-by-hop headers, ensure `Content-Length` is present, force
-// `Connection: close`.
+// Drops hop-by-hop headers, ensures Content-Length is set, forces Connection: close.
 fn sanitize_response(resp: &mut Response) {
     resp.headers.retain(|(k, _)| !strip_for_response(k));
     let has_len = resp
@@ -150,7 +130,5 @@ fn strip_for_request(name: &str) -> bool {
 }
 
 fn strip_for_response(name: &str) -> bool {
-    HOP_BY_HOP
-        .iter()
-        .any(|h| h.eq_ignore_ascii_case(name))
+    HOP_BY_HOP.iter().any(|h| h.eq_ignore_ascii_case(name))
 }

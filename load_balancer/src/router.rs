@@ -1,10 +1,4 @@
-// Routing for client-facing requests.
-//
-// Three buckets:
-//   * static frontend assets (`/`, `/assets/*`);
-//   * the live status endpoint (`/api/servers`) that the HTMX UI polls;
-//   * everything else — proxied to a backend chosen by the scheduler with
-//     sticky-session preference.
+// Request dispatcher: static assets, /api/servers status fragment, or backend proxy.
 
 use std::fs;
 use std::io::Read;
@@ -24,9 +18,7 @@ pub struct RouterCtx {
     pub frontend_dir: PathBuf,
 }
 
-// Top-level router for the public listeners. Pattern-matches (method, path)
-// against the three handled buckets — frontend HTML, asset, status fragment
-// — and falls through to a backend proxy for everything else.
+// Matches (method, path) and dispatches to the appropriate handler.
 pub fn route(ctx: &RouterCtx, client_ip: IpAddr, req: &Request) -> Response {
     match (req.method.as_str(), req.target.as_str()) {
         ("GET", "/") => serve_static(
@@ -39,9 +31,7 @@ pub fn route(ctx: &RouterCtx, client_ip: IpAddr, req: &Request) -> Response {
     }
 }
 
-// Resolve the chosen backend (sticky-session-aware via `Registry::route`)
-// and forward the request through `proxy::forward`. Returns 503 if no
-// backend is currently live, 502 if the upstream call itself failed.
+// Routes to a sticky-pinned or freshly picked backend; returns 503/502 on failure.
 fn proxy_to_backend(ctx: &RouterCtx, client_ip: IpAddr, req: &Request) -> Response {
     let Some(backend) = ctx.registry.route(client_ip, lowest_load) else {
         return Response::status(503, "Service Unavailable", "no backend currently available");
@@ -56,8 +46,7 @@ fn proxy_to_backend(ctx: &RouterCtx, client_ip: IpAddr, req: &Request) -> Respon
     }
 }
 
-// Serve a single, fully-resolved static file from disk with the given
-// content type. Used for the `index.html` entry point.
+// Read a file from disk and serve it with the given content type.
 fn serve_static(path: &Path, content_type: &str) -> Response {
     match fs::read(path) {
         Ok(body) => Response::ok(body, content_type),
@@ -65,12 +54,8 @@ fn serve_static(path: &Path, content_type: &str) -> Response {
     }
 }
 
-// Serve any file under `/assets/...` from disk, with a path-traversal
-// guard: we canonicalize both the frontend root and the target, then
-// reject anything that resolves outside the root.
+// Serves a file from /assets/ with a canonicalize-based path-traversal guard.
 fn serve_asset(frontend_dir: &Path, target: &str) -> Response {
-    // `target` looks like "/assets/style.css". Resolve under frontend_dir and
-    // refuse to traverse upward.
     let rel = target.trim_start_matches('/');
     let candidate = frontend_dir.join(rel);
     let canonical_root = match fs::canonicalize(frontend_dir) {
@@ -96,9 +81,7 @@ fn serve_asset(frontend_dir: &Path, target: &str) -> Response {
     Response::ok(body, content_type)
 }
 
-// Tiny extension-based MIME lookup for the few asset types we ship
-// (HTML, CSS, JS, SVG, PNG). Anything else falls back to a generic
-// `application/octet-stream`.
+// Extension-to-MIME mapping for shipped asset types; falls back to octet-stream.
 fn guess_content_type(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("css") => "text/css; charset=utf-8",
@@ -110,8 +93,7 @@ fn guess_content_type(path: &Path) -> &'static str {
     }
 }
 
-/// Render the registry as an HTMX-swappable HTML fragment. We deliberately
-/// emit HTML instead of JSON so the frontend stays JS-free.
+// Renders the backend table as an HTMX-swappable HTML fragment.
 fn render_servers_html(registry: &Registry) -> Response {
     let mut html = String::new();
     html.push_str("<table class=\"servers\">");
@@ -143,9 +125,7 @@ fn render_servers_html(registry: &Registry) -> Response {
     Response::ok(html.into_bytes(), "text/html; charset=utf-8")
 }
 
-// Minimal HTML entity encoder for the five characters that matter when
-// embedding untrusted text inside an HTML body. Used by the status
-// fragment so a server_id with weird chars can't inject markup.
+// Escapes &, <, >, " to prevent markup injection in the status fragment.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")

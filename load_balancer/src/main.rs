@@ -1,14 +1,4 @@
-// Load balancer entry point.
-//
-// Two TLS listeners:
-//   * `public_port`        — clients (browsers, curl) hit this. Frontend
-//                            assets are served directly; everything else is
-//                            proxied to a backend over mTLS.
-//   * `health_ingest_port` — backend servers POST `/_health` here. Separate
-//                            socket so client traffic and control-plane
-//                            traffic can never get crossed.
-//
-// Each connection is handled on its own std::thread.
+// Load balancer entry point — three listeners (HTTPS, HTTP, health ingest), one thread per connection.
 
 use std::env;
 use std::io::BufReader;
@@ -30,9 +20,6 @@ use health::{Backend, HealthCtx, Registry};
 use proxy::ProxyCtx;
 use router::RouterCtx;
 
-// LB process entry point. Boots the registry, spawns the health-ingest
-// listener and the plain-HTTP listener, then blocks on the public TLS
-// listener which accepts client traffic.
 fn main() {
     let cfg = Config::from_env();
     eprintln!(
@@ -56,7 +43,6 @@ fn main() {
         .collect();
     let registry = Arc::new(Registry::with_seed(seeds));
 
-    // Health ingest listener — backend -> LB.
     {
         let registry = registry.clone();
         let tls_server = tls_server.clone();
@@ -67,15 +53,13 @@ fn main() {
             .expect("spawn health listener");
     }
 
-    // Public listener — clients -> LB.
     let router_ctx = Arc::new(RouterCtx {
         registry: registry.clone(),
         proxy: ProxyCtx { tls_client },
         frontend_dir: cfg.frontend_dir.clone(),
     });
 
-    // Plain-HTTP listener — browser convenience without TLS cert acceptance.
-    // Skipped if `LB_HTTP_PORT=0`.
+    // Skipped if LB_HTTP_PORT=0.
     if cfg.public_http_port != 0 {
         let router_ctx = router_ctx.clone();
         let port = cfg.public_http_port;

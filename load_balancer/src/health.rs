@@ -1,12 +1,4 @@
-// Backend health: the registry, the ingest endpoint, the sticky-session
-// table.
-//
-// `Registry` is the source of truth for "which backends are live and how
-// loaded are they?". It's read by the router every time we have to pick
-// where a request should go, and written by the ingest handler every time a
-// server pushes a `HealthReport`. Both critical sections are short, so
-// straight `std::sync::Mutex` is fine without reaching for parking_lot or
-// RwLock.
+// Backend registry, sticky-session table, and health-ingest endpoint.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -15,13 +7,10 @@ use std::time::{Duration, Instant};
 
 use shared::parser::{HealthReport, Request, Response};
 
-/// If we haven't heard from a server in this long, treat it as unavailable
-/// regardless of what its last report said.
+// Backend is considered dead if no report arrives within this window.
 pub const STALE_AFTER: Duration = Duration::from_secs(10);
 
-/// How long a sticky-session binding survives. If the chosen server goes away
-/// before this expires we evict and re-route immediately; otherwise the
-/// client lands on the same server for this window.
+// Sticky-session binding lifetime; re-routed immediately if the pinned backend goes stale.
 pub const STICKY_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Clone)]
@@ -36,9 +25,7 @@ pub struct Backend {
 }
 
 impl Backend {
-    // Construct a freshly-seeded backend entry. We start it as `available =
-    // false`/`load = 1.0` so a backend that never reports in is treated as
-    // down rather than as a perfectly idle target.
+    // Starts as unavailable/load=1.0 so a backend that never reports is treated as down.
     pub fn new(server_id: String, host: String, port: u16) -> Self {
         Self {
             server_id,
@@ -51,9 +38,7 @@ impl Backend {
         }
     }
 
-    // A backend is "live" iff it claimed `available = true` in its last
-    // report *and* that report arrived within `STALE_AFTER`. The freshness
-    // check defends against backends that crash without notifying us.
+    // True only if available=true and last report arrived within STALE_AFTER.
     pub fn is_live(&self, now: Instant) -> bool {
         if !self.available {
             return false;
@@ -72,8 +57,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    // Build a registry pre-populated with the given backends (one per
-    // configured host). The sticky-session table starts empty.
+    // Initialize the registry with seeded backends; sticky table starts empty.
     pub fn with_seed(seed: Vec<Backend>) -> Self {
         let mut map = HashMap::new();
         for b in seed {
@@ -85,9 +69,7 @@ impl Registry {
         }
     }
 
-    // Update the registry entry for the server identified in `report`.
-    // Reports for unknown server_ids are dropped on the floor — they would
-    // otherwise let a misconfigured peer inject a phantom backend.
+    // Apply an incoming report; unknown server_ids are silently dropped to prevent phantom backends.
     pub fn apply_report(&self, report: HealthReport) {
         let mut g = self.backends.lock().expect("backends lock poisoned");
         if let Some(b) = g.get_mut(&report.server_id) {
@@ -98,7 +80,7 @@ impl Registry {
         }
     }
 
-    /// Snapshot of all backends, sorted by server_id for stable UIs.
+    /// Returns all backends sorted by server_id.
     pub fn snapshot(&self) -> Vec<Backend> {
         let g = self.backends.lock().expect("backends lock poisoned");
         let mut v: Vec<Backend> = g.values().cloned().collect();
@@ -106,8 +88,7 @@ impl Registry {
         v
     }
 
-    /// Resolve which backend should handle a request from `client`.
-    /// Honors any live sticky binding, otherwise delegates to `pick`.
+    /// Route a client to its pinned backend, or pick a fresh one via `pick` if no live binding exists.
     pub fn route(
         &self,
         client: IpAddr,
@@ -119,7 +100,6 @@ impl Registry {
             g.values().cloned().collect()
         };
 
-        // Try existing sticky binding first.
         let sticky_choice = {
             let mut g = self.sticky.lock().expect("sticky lock poisoned");
             g.retain(|_, (_, t)| now.duration_since(*t) <= STICKY_TTL);
@@ -134,7 +114,6 @@ impl Registry {
             return Some(b);
         }
 
-        // No usable sticky entry — pick fresh among the live ones.
         let live: Vec<Backend> = backends_snapshot
             .into_iter()
             .filter(|b| b.is_live(now))
@@ -147,21 +126,11 @@ impl Registry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Health ingest endpoint.
-//
-// Servers POST `/_health` to the LB on a dedicated TLS port (separate from
-// public traffic so we can apply different policy and never confuse one for
-// the other). The health-ingest port is only reachable within the Docker
-// bridge network, so network isolation handles authentication here.
-// ---------------------------------------------------------------------------
-
 pub struct HealthCtx {
     pub registry: Arc<Registry>,
 }
 
-// Parse and apply one incoming health report. Rejects wrong method/path and
-// malformed bodies; everything else is fed into the registry.
+// Parse and apply one health report POSTed to /_health; rejects wrong method, path, or body.
 pub fn handle(ctx: &HealthCtx, req: &Request) -> Response {
     if req.method != "POST" || req.target != "/_health" {
         return Response::status(404, "Not Found", "no such route");
