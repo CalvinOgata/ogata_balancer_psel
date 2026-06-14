@@ -1,14 +1,4 @@
-// Backend server entry point.
-//
-// Each container runs one of these. It does two things:
-//   * accepts mTLS connections from the load balancer and serves a random PDF;
-//   * pushes periodic health reports to the load balancer's ingest endpoint.
-//
-// Security is handled at the transport layer (mTLS + IP allowlist). No
-// application-level auth token is needed — the mTLS handshake already proves
-// the caller is the load balancer.
-//
-// Everything runs on std::thread + std::net + rustls. No async runtime.
+// Backend server: accepts mTLS connections and serves PDFs; health reporter runs on a second thread.
 
 use std::env;
 use std::io::BufReader;
@@ -20,8 +10,8 @@ use std::time::Duration;
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConnection, ServerConnection, Stream};
-use shared::parser::{Request, read_response, write_request};
 use shared::SERVER_ID_HEADER;
+use shared::parser::{Request, read_response, write_request};
 
 mod handler;
 mod health;
@@ -40,12 +30,9 @@ fn main() {
         cfg.lb_health_port
     );
 
-    let tls_server = shared::tls::server_config_mtls(
-        &cfg.cert_path,
-        &cfg.key_path,
-        &cfg.lb_client_ca_path,
-    )
-    .expect("failed to build mTLS server config");
+    let tls_server =
+        shared::tls::server_config_mtls(&cfg.cert_path, &cfg.key_path, &cfg.lb_client_ca_path)
+            .expect("failed to build mTLS server config");
     let tls_client =
         shared::tls::client_config(&cfg.cert_path).expect("failed to build TLS client config");
 
@@ -78,17 +65,22 @@ fn main() {
             }
         };
 
-        // IP allowlist check — must be the very first thing after accept,
-        // before TLS, before reading a single byte.
+        // IP allowlist — checked before TLS, before reading any bytes.
         let peer_ip = match sock.peer_addr() {
             Ok(a) => a.ip(),
             Err(e) => {
-                eprintln!("[{}] could not read peer address, rejecting: {}", cfg.server_id, e);
+                eprintln!(
+                    "[{}] could not read peer address, rejecting: {}",
+                    cfg.server_id, e
+                );
                 continue;
             }
         };
         if !cfg.lb_addrs.contains(&peer_ip) {
-            eprintln!("[{}] rejected {} — not the load balancer", cfg.server_id, peer_ip);
+            eprintln!(
+                "[{}] rejected {} — not the load balancer",
+                cfg.server_id, peer_ip
+            );
             continue;
         }
 
@@ -153,9 +145,7 @@ impl Config {
                 .unwrap_or(2),
         );
 
-        // Resolve the load balancer's hostname at startup with a retry loop.
-        // Retries for up to 30 s because Docker DNS may not yet have the LB
-        // container registered when this server starts.
+        // Retry loop: Docker DNS may not resolve the LB hostname immediately at startup.
         let lb_addrs: Vec<IpAddr> = {
             let addr_str = format!("{}:{}", lb_host, lb_health_port);
             let mut attempts = 0u32;
@@ -171,15 +161,17 @@ impl Config {
                 }
                 attempts += 1;
                 if attempts >= 30 {
-                    panic!("cannot resolve load balancer '{}' after {} attempts", lb_host, attempts);
+                    panic!(
+                        "cannot resolve load balancer '{}' after {} attempts",
+                        lb_host, attempts
+                    );
                 }
                 thread::sleep(Duration::from_secs(1));
             }
         };
 
         let lb_client_ca_path = PathBuf::from(
-            env::var("LB_CLIENT_CA_PATH")
-                .unwrap_or_else(|_| "/app/certs/lb-client.pem".into()),
+            env::var("LB_CLIENT_CA_PATH").unwrap_or_else(|_| "/app/certs/lb-client.pem".into()),
         );
 
         Self {

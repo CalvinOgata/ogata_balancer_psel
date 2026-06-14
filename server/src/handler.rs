@@ -1,15 +1,4 @@
-// Per-connection request handler.
-//
-// Every connection arrives over mTLS from the load balancer — the TLS
-// handshake verifies the caller's identity before a single byte of HTTP is
-// read. We therefore skip any application-layer auth token and go straight
-// to routing. The IP allowlist in main.rs rejects non-LB connections before
-// TLS even starts.
-//
-//   1. Parse the HTTP request from the TLS stream.
-//   2. Route to the appropriate handler (random PDF or ping).
-//   3. Tag the response with `X-Server-Id` so the UI knows which backend served.
-//   4. Emit a structured access log line regardless of outcome.
+// Per-connection handler: parse request, route, tag response with X-Server-Id, emit access log.
 
 use std::fs;
 use std::io::{BufReader, Write};
@@ -20,8 +9,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rand::seq::SliceRandom;
 use rustls::{ServerConnection, Stream};
-use shared::parser::{Request, Response, read_request, write_response};
 use shared::SERVER_ID_HEADER;
+use shared::parser::{Request, Response, read_request, write_response};
 
 use crate::health::{HealthState, InFlightGuard};
 
@@ -52,7 +41,10 @@ pub fn handle_connection(
                 0,
                 started.elapsed().as_millis(),
             );
-            eprintln!("[{}] parse error from {}: {}", ctx.health.server_id, peer_ip, e);
+            eprintln!(
+                "[{}] parse error from {}: {}",
+                ctx.health.server_id, peer_ip, e
+            );
             return;
         }
     };
@@ -64,7 +56,10 @@ pub fn handle_connection(
     let status = resp.status;
 
     if let Err(e) = write_response(&mut stream, &resp) {
-        eprintln!("[{}] write error to {}: {}", ctx.health.server_id, peer_ip, e);
+        eprintln!(
+            "[{}] write error to {}: {}",
+            ctx.health.server_id, peer_ip, e
+        );
     }
 
     access_log(
@@ -77,8 +72,7 @@ pub fn handle_connection(
     );
 }
 
-// Emit one access log line to stderr. Format:
-//   [server_id] ACCESS unix_ts peer method target → status (elapsed_ms ms)
+// Writes one structured access log line to stderr.
 fn access_log(
     server_id: &str,
     peer: IpAddr,
@@ -97,8 +91,7 @@ fn access_log(
     );
 }
 
-// Dispatch on (method, path). Tags every outgoing response with `X-Server-Id`
-// so the LB and the HTMX UI can show which backend served the request.
+// Dispatches on (method, path) and tags the response with X-Server-Id.
 fn route(ctx: &HandlerCtx, req: &Request) -> Response {
     let mut resp = match (req.method.as_str(), req.target.as_str()) {
         ("GET", "/file") => serve_random_pdf(&ctx.files_dir),
