@@ -1,10 +1,24 @@
-# ogata_balancer
+# 🔀 ogata_balancer
 
 A load balancer built from scratch in Rust, for learning how TCP connections, HTTP parsing, and request routing work at the implementation level. No async runtime, no HTTP framework, no Nginx — just `TcpListener`, `TcpStream`, and raw byte parsing.
 
 ---
 
-## What it does
+## 🧰 Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Rust (edition 2024) |
+| TLS | `rustls` 0.23 (TLS 1.3 only) |
+| Cert parsing | `rustls-pemfile` |
+| Randomness | `rand` |
+| Frontend | HTMX 1.9 |
+| Infrastructure | Docker + Docker Compose |
+| HTTP parsing | Hand-written (no library) |
+
+---
+
+## ✨ What it does
 
 The system distributes incoming file requests across five backend servers. Each backend holds a set of PDF files and serves one at random per request. The load balancer tracks how busy each server is and routes new requests to the least-loaded one, keeping the same client pinned to the same server for the duration of a session.
 
@@ -12,7 +26,7 @@ A live dashboard in the browser shows all five servers, their current load, and 
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 Browser
@@ -48,7 +62,7 @@ Three Rust crates in a workspace, six Docker containers on a shared private netw
 
 ---
 
-## Load balancing
+## ⚖️ Load balancing
 
 Servers continuously self-report their load as `in_flight / 32` — the ratio of concurrent requests being handled to the server's notional capacity. The LB always routes to the live backend with the lowest ratio.
 
@@ -58,7 +72,7 @@ A backend is considered stale if no health report has arrived in the last 10 sec
 
 ---
 
-## The backend servers
+## 🖥️ The backend servers
 
 All five backends run the same binary, distinguished only by the `SERVER_ID` environment variable. PDFs are copied into the Docker image at build time — each container is self-contained.
 
@@ -72,9 +86,9 @@ Load is tracked with an atomic `in_flight` counter and an RAII guard (`InFlightG
 
 ---
 
-## HTTP parsing (`protocol.rs`)
+## 🔍 HTTP parsing (`parser.rs`)
 
-There is no HTTP library in this project. Every request and response is parsed by hand in `shared/src/protocol.rs` using only `std::io::BufReader`.
+There is no HTTP library in this project. Every request and response is parsed by hand in `shared/src/parser.rs` using only `std::io::BufReader`.
 
 Parsing happens in three stages: the request line (method, target, version), then headers (split into `Vec<(String, String)>`), then the body — but only if `Content-Length` is present, and capped at 1 MB to prevent memory exhaustion.
 
@@ -84,7 +98,7 @@ If both `Content-Length` and `Transfer-Encoding` appear in the same request, it 
 
 ---
 
-## Security
+## 🔒 Security
 
 **Docker bridge network** — backends bind on port 4443 but that port is never published to the host. Nothing outside the Docker network has a route to them.
 
@@ -96,7 +110,7 @@ TLS 1.2 is disabled at the dependency level (`rustls` compiled without the `tls1
 
 ---
 
-## Running it
+## 🚀 Running it
 
 **Prerequisites:** Docker, Docker Compose, `openssl`.
 
@@ -138,7 +152,7 @@ http://localhost:8080
 
 ---
 
-## Project layout
+## 📁 Project layout
 
 ```
 ogata_balancer/
@@ -156,7 +170,7 @@ ogata_balancer/
 │       └── health.rs      # in-flight counter, HealthState
 ├── shared/
 │   └── src/
-│       ├── protocol.rs    # HTTP/1.1 parser + HealthReport
+│       ├── parser.rs      # HTTP/1.1 parser + HealthReport
 │       └── tls.rs         # rustls config builders
 ├── frontend/
 │   └── index.html         # HTMX dashboard
